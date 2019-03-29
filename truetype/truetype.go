@@ -15,7 +15,7 @@
 //
 // To measure a TrueType font in ideal FUnit space, use scale equal to
 // font.FUnitsPerEm().
-package truetype // import "github.com/golang/freetype/truetype"
+package truetype // import "github.com/justinlindh/freetype/truetype"
 
 import (
 	"fmt"
@@ -321,10 +321,18 @@ func (f *Font) parseKern() error {
 		return FormatError("kern data too short")
 	}
 	version, offset := u16(f.kern, 0), 2
-	if version != 0 {
+	switch version {
+	case 0:
+		return f.parseKernV1(offset) // kernV1 version is uint16
+	case 1:
+		return f.parseKernV2(offset + 2) // kernV2 version is fixed32
+	default:
 		return UnsupportedError(fmt.Sprintf("kern version: %d", version))
 	}
+}
 
+// https://docs.microsoft.com/en-us/typography/opentype/spec/kern
+func (f *Font) parseKernV1(offset int) error {
 	n, offset := u16(f.kern, offset), offset+2
 	if n == 0 {
 		return UnsupportedError("kern nTables: 0")
@@ -336,7 +344,6 @@ func (f *Font) parseKern() error {
 	// being the same kerning pairs encoded in three different ways.
 	//
 	// For now, we'll use only the first subtable.
-
 	offset += 2 // Skip the version.
 	length, offset := int(u16(f.kern, offset)), offset+2
 	coverage, offset := u16(f.kern, offset), offset+2
@@ -345,9 +352,26 @@ func (f *Font) parseKern() error {
 		return UnsupportedError(fmt.Sprintf("kern coverage: 0x%04x", coverage))
 	}
 	f.nKern, offset = int(u16(f.kern, offset)), offset+2
-	if 6*f.nKern != length-14 {
-		return FormatError("bad kern table length")
+	// some fonts clip the kern table (idk why) so just make sure we don't overrun our bounds
+	if 6*f.nKern != length-14 && 6*f.nKern != len(f.kern)-18 {
+		return FormatError("bad kern table length: " + fmt.Sprintf("%d != %d : %d", 6*f.nKern, length-14, len(f.kern)))
 	}
+	return nil
+}
+
+// https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6kern.html
+func (f *Font) parseKernV2(offset int) error {
+	n, offset := u32(f.kern, offset), offset+4
+	if n == 0 {
+		return UnsupportedError("kern nTables: 0 V2")
+	}
+	// TODO: support multiple subtables. In practice, almost all .ttf files
+	// have only one subtable, if they have a kern table at all. But it's not
+	// impossible. Xolonium Regular (https://fontlibrary.org/en/font/xolonium)
+	// has 3 subtables. Those subtables appear to be disjoint, rather than
+	// being the same kerning pairs encoded in three different ways.
+	//
+	// For now, we'll use only the first subtable.
 	return nil
 }
 
